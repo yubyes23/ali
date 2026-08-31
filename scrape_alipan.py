@@ -3,9 +3,11 @@ import time
 from playwright.sync_api import sync_playwright
 
 def main():
-    share_url = "https://www.alipan.com/s/WqpSshkZP9g/folder/651bffcd16ce6c2ad62944678622e204e6b752bf"
+    # 根分享链接
+    root_share_url = "https://www.alipan.com/s/WqpSshkZP9g"
+    target_folder_name = "电视剧实时同步更新"
     
-    print(f"正在以容器滚动模式启动抓取: {share_url}")
+    print(f"正在以拟真交互模式启动抓取: {root_share_url}")
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -24,24 +26,42 @@ def main():
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
         try:
-            print("正在安全访问页面...")
-            page.goto(share_url, timeout=60000, wait_until="domcontentloaded")
+            print("1. 正在访问根分享链接...")
+            page.goto(root_share_url, timeout=60000, wait_until="domcontentloaded")
             
-            print("等待初始加载 (8秒)...")
+            print("等待根目录加载 (8秒)...")
             time.sleep(8)
             
-            all_folders = set()
+            # 2. 寻找目标文件夹并点击进入
+            print(f"正在寻找目标文件夹: '{target_folder_name}' ...")
             
-            # 循环向下滚动，针对阿里云盘的滚动容器进行模拟
-            print("开始模拟容器滚动以加载全量数据...")
-            for i in range(20):
-                print(f"正在进行第 {i+1}/20 次滚动加载...")
+            # 尝试通过文本精准定位并点击
+            try:
+                # 寻找包含目标名称的元素并点击
+                folder_locator = page.locator(f"text={target_folder_name}").first
+                folder_locator.wait_for(state="visible", timeout=10000)
+                folder_locator.click()
+                print("成功点击进入目标文件夹！")
+            except Exception as click_err:
+                print(f"按文本直接点击失败，尝试遍历点击: {click_err}")
+                # 备用方案：截图并抛出异常，帮助排查
+                page.screenshot(path="click_error_snapshot.png", full_page=True)
+                raise click_err
+            
+            # 等待子文件夹内部页面渲染加载
+            print("等待子文件夹内部列表加载 (6秒)...")
+            time.sleep(6)
+            
+            # 3. 在子文件夹内部开始慢速向下滚动，获取所有 300 多个子项
+            all_folders = set()
+            print("开始在子文件夹内模拟容器滚动以加载全量数据...")
+            
+            for i in range(25): # 25轮滚动，确保能拉到底
+                print(f"正在进行第 {i+1}/25 次滚动加载...")
                 
-                # 核心改进：同时对 window 和可能的内部滚动列表执行向下滚动指令
                 page.evaluate("""
                     () => {
                         window.scrollBy(0, 1000);
-                        // 寻找可能的内部滚动容器并滚动到底部
                         const scrollers = document.querySelectorAll('div');
                         scrollers.forEach(el => {
                             if (el.scrollHeight > el.clientHeight) {
@@ -51,11 +71,9 @@ def main():
                     }
                 """)
                 
-                # 留出充足时间让懒加载请求返回数据
-                time.sleep(3)
+                time.sleep(3) # 停顿 3 秒防风控和等异步数据
                 
-                # 提取当前页面渲染出的所有文件名标签
-                # 阿里云盘通常使用带有 title 属性的元素或者文件列表项展示名称
+                # 提取当前可见的文件名
                 elements = page.locator('.file-item-title, [class*="file-name"], [class*="ItemName"], span[title]').all()
                 for el in elements:
                     try:
@@ -78,7 +96,8 @@ def main():
             
             result = {
                 "update_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-                "source_url": share_url,
+                "source_url": root_share_url,
+                "target_folder": target_folder_name,
                 "total_items": len(final_items),
                 "items": final_items
             }
