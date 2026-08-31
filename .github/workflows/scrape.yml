@@ -1,14 +1,12 @@
-name: Clean Aliyun Share Links
+name: Clean Aliyun Shares File
 
 on:
-  # 支持手动触发
   workflow_dispatch:
-  # 支持定时自动运行（例如每天凌晨 4 点运行一次）
   schedule:
-    - cron: '0 4 * * *'
+    - cron: '0 4 * * *' # 每天北京时间中午 12 点（UTC 4点）自动执行
 
 jobs:
-  run-script:
+  clean:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -18,23 +16,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install requests
 
       - name: Run Cleaning Script
-        env:
-          # 如果需要 Cookie 或 Token，可以通过 GitHub Secrets 传入
-          ALIYUN_TOKEN: ${{ secrets.ALIYUN_TOKEN }}
         run: |
           python clean.py
 
-      - name: Commit and Push Changes
+      - name: Commit and Push if changed
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-clean dead/expired sharing links [skip ci]" && git push)
+          git add ali_shares.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-clean dead and expired ali_shares.txt [skip ci]" && git push)
