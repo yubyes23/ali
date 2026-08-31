@@ -6,45 +6,39 @@ import requests
 # 配置文件路径
 FILE_PATH = "ali_shares.txt"
 
-def check_link_exist(share_id):
+def check_link_by_web(share_id):
     """
-    使用阿里云盘官方正确的分享查询接口
+    通过直接访问阿里云盘分享落地页的 HTTP 状态码来判断存活
+    返回: True (活着), False (死链/404/不存在)
     """
-    # 官方标准的获取分享信息接口
-    url = "https://api.alipan.com/v2/share_link/get_share_by_code"
+    url = f"https://www.alipan.com/s/{share_id}"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Content-Type": "application/json",
-        "Referer": "https://www.alipan.com/"
-    }
-    
-    payload = {
-        "share_code": share_id
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=6)
+        # 使用 allow_redirects=True 顺便处理重定向
+        response = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
         
-        # 如果返回 404 或其他错误，打印出来便于观察
-        if response.status_code != 200:
-            print(f"    [提示] 接口返回状态码 {response.status_code}")
-            # 如果是 404，说明接口路径不对或失效，这里放行避免误杀
-            return True
+        # 如果网页直接返回 404，或者提示页面不存在，说明死链
+        if response.status_code == 404:
+            return False
             
-        res_data = response.json()
-        
-        # 检查阿里云盘明确的失效错误码
-        if "code" in res_data:
-            code_str = str(res_data["code"])
-            if code_str in ["ShareLinkNotFound", "NotFound", "ShareLinkCancelled", "ShareLinkForbidden"]:
-                print(f"    [失效] 阿里云盘反馈链接不存在: {code_str}")
-                return False
-                
+        # 有时候阿里云盘死链会重定向到一个统一的“页面不存在”或提示页，可以通过网页文本简单二次判断
+        body_text = response.text
+        if "已被取消" in body_text or "不存在" in body_text or "已失效" in body_text:
+            return False
+            
+        # 只要能正常响应（例如 200），且没有明显的失效字眼，就判定为正常
         return True
         
-    except Exception as e:
-        print(f"    [网络异常] {e}")
+    except requests.exceptions.RequestException:
+        # 网络波动超时等情况，为防止误杀，默认判定为存活保留
+        return True
+    except Exception:
         return True
 
 def main():
@@ -65,7 +59,7 @@ def main():
         print(f"[-] 文件 {FILE_PATH} 读取为空！")
         return
 
-    print(f"=== 开始精准校验，共读取到 {len(lines)} 行记录 ===")
+    print(f"=== 开始网页状态校验，共读取到 {len(lines)} 行记录 ===")
     
     valid_records = []
     dead_count = 0
@@ -77,15 +71,13 @@ def main():
         if not original_line or original_line.startswith("#"):
             continue
 
-        # 核心改进：精准通过正则提取带有 0: 或 1: 的分享ID
+        # 精准匹配 0: 或 1: 后面的 11-14 位分享码
         share_id = ""
-        
-        # 在整行中搜索形如 0:5JnzcFFWa6Y 中的分享码部分
         match = re.search(r'\b\d+:([a-zA-Z0-9]{11,14})\b', original_line)
         if match:
             share_id = match.group(1)
         else:
-            # 备用匹配：直接找 11-14 位的纯字母数字
+            # 备用兼容逻辑
             tokens = original_line.split()
             for token in tokens:
                 clean_token = token.replace("0:", "").replace("1:", "")
@@ -99,8 +91,8 @@ def main():
             skipped_count += 1
             continue
 
-        # 测试有效性
-        is_alive = check_link_exist(share_id)
+        # 通过网页访问检测
+        is_alive = check_link_by_web(share_id)
         
         if not is_alive:
             print(f"[剔除死链] {original_line}  -> (提取的纯净ID: {share_id})")
@@ -109,7 +101,7 @@ def main():
             print(f"[保留有效] ID: {share_id}")
             valid_records.append(original_line)
             
-        time.sleep(0.3)
+        time.sleep(0.3)  # 保持适当缓冲，避免请求太快触发 Cloudflare/防火墙拦截
 
     # 写回原文件
     with open(FILE_PATH, "w", encoding="utf-8") as f:
