@@ -76,6 +76,8 @@ def main():
                                 if clean_name and len(clean_name) > 1:
                                     if not any(kw in clean_name for kw in [
                                         "下载", "SVIP", "分享", "实时同步", "共 ", "按名称", 
+                                        "公众号", "08/", "06/", "04/", "03/", "07/", "10/", 
+                                        "2025/", "2026/", "今天", "文件夹", "大小", "修改时间",
                                         "上一页", "下一页", "确定", "取消", "属性", "重命名"
                                     ]) and not clean_name.isdigit():
                                         all_folders.add(clean_name)
