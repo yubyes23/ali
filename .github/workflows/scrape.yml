@@ -1,0 +1,45 @@
+name: Sync Alipan Files
+
+on:
+  # 允许在 GitHub Actions 页面手动触发
+  workflow_dispatch:
+  # 定时任务：每天北京时间早上 8 点和下午 2 点自动运行（Cron 使用 UTC 时间）
+  schedule:
+    - cron: '0 0,6 * * *'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install chromium
+
+      - name: 运行抓取脚本
+        run: |
+          python scrape_alipan.py
+
+      - name: 提交并推送更新的文件到仓库
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # 检查是否有文件变动
+          git status
+          git add alipan_list.json
+          
+          # 如果没有变动就跳过提交
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto: Update alipan file list [skip ci]" && git push)
