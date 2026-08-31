@@ -6,12 +6,12 @@ import requests
 # 配置文件路径
 FILE_PATH = "ali_shares.txt"
 
-def check_link_content(share_id, extraction_code=""):
+def check_link_exist(share_id):
     """
-    直接测试分享内容是否还在（通过获取分享文件列表接口）
-    返回: True (内容正常存在), False (内容为空、已被删空或风控失效)
+    使用阿里云盘官方正确的分享查询接口
     """
-    url = "https://api.alipan.com/adrive/v3/file/list_by_share"
+    # 官方标准的获取分享信息接口
+    url = "https://api.alipan.com/v2/share_link/get_share_by_code"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -19,45 +19,32 @@ def check_link_content(share_id, extraction_code=""):
         "Referer": "https://www.alipan.com/"
     }
     
-    # 获取分享详情通常需要 share_id，部分有提取码的可能需要 extra_code
     payload = {
-        "share_id": share_id,
-        "parent_file_id": "root",  # 根目录
-        "limit": 50
+        "share_code": share_id
     }
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=6)
         
-        # 接口状态码非 200 视作异常或被风控
+        # 如果返回 404 或其他错误，打印出来便于观察
         if response.status_code != 200:
-            print(f"    [提示] 接口返回状态码 {response.status_code}，暂且放行防止误杀")
+            print(f"    [提示] 接口返回状态码 {response.status_code}")
+            # 如果是 404，说明接口路径不对或失效，这里放行避免误杀
             return True
             
         res_data = response.json()
         
-        # 检查阿里云盘明确的错误码（如分享不存在、已取消等）
+        # 检查阿里云盘明确的失效错误码
         if "code" in res_data:
             code_str = str(res_data["code"])
             if code_str in ["ShareLinkNotFound", "NotFound", "ShareLinkCancelled", "ShareLinkForbidden"]:
-                print(f"    [内容失效] 链接已被删或屏蔽: {code_str}")
+                print(f"    [失效] 阿里云盘反馈链接不存在: {code_str}")
                 return False
                 
-        # 检查文件列表项
-        items = res_data.get("items", [])
-        
-        # 如果 items 为空，说明里面已经没有文件了（被清空或和谐）
-        if isinstance(items, list) and len(items) == 0:
-            print(f"    [内容为空] 分享目录内文件已被清空")
-            return False
-            
         return True
         
-    except requests.exceptions.RequestException as e:
-        print(f"    [网络异常] 请求出错: {e}，暂且放行")
-        return True
     except Exception as e:
-        print(f"    [未知错误] {e}")
+        print(f"    [网络异常] {e}")
         return True
 
 def main():
@@ -75,10 +62,10 @@ def main():
             continue
 
     if not lines:
-        print(f"[-] 文件 {FILE_PATH} 读取为空，或者编码无法识别！")
+        print(f"[-] 文件 {FILE_PATH} 读取为空！")
         return
 
-    print(f"=== 开始内容检测，共读取到 {len(lines)} 行记录 ===")
+    print(f"=== 开始精准校验，共读取到 {len(lines)} 行记录 ===")
     
     valid_records = []
     dead_count = 0
@@ -90,47 +77,39 @@ def main():
         if not original_line or original_line.startswith("#"):
             continue
 
-        # 提取字段
-        tokens = original_line.split()
+        # 核心改进：精准通过正则提取带有 0: 或 1: 的分享ID
         share_id = ""
-        pwd = ""
+        
+        # 在整行中搜索形如 0:5JnzcFFWa6Y 中的分享码部分
+        match = re.search(r'\b\d+:([a-zA-Z0-9]{11,14})\b', original_line)
+        if match:
+            share_id = match.group(1)
+        else:
+            # 备用匹配：直接找 11-14 位的纯字母数字
+            tokens = original_line.split()
+            for token in tokens:
+                clean_token = token.replace("0:", "").replace("1:", "")
+                if re.match(r'^[a-zA-Z0-9]{11,14}$', clean_token):
+                    share_id = clean_token
+                    break
 
-        # 匹配 0:分享ID 格式
-        for token in tokens:
-            if re.match(r'^\d+:[a-zA-Z0-9]+$', token):
-                share_id = token.split(":")[-1]
-                break
-            elif re.match(r'^[a-zA-Z0-9]{11,14}$', token):
-                share_id = token
-                break
-
-        # 提取密码（如果有的化，通常在后面）
-        if len(tokens) >= 3:
-            pwd = tokens[2]
-
-        # 兜底逻辑
-        if not share_id and len(tokens) >= 2:
-            candidate = tokens[1].replace("0:", "").replace("1:", "")
-            if len(candidate) >= 6:
-                share_id = candidate
-
-        if not share_id or len(share_id) < 6:
+        if not share_id:
             print(f"[跳过] 无法提取有效分享码: {original_line}")
             valid_records.append(original_line)
             skipped_count += 1
             continue
 
-        # 直接测试内容是否还在
-        is_content_valid = check_link_content(share_id, pwd)
+        # 测试有效性
+        is_alive = check_link_exist(share_id)
         
-        if not is_content_valid:
-            print(f"[剔除] 内容失效/空链: {original_line}  -> (纯净ID: {share_id})")
+        if not is_alive:
+            print(f"[剔除死链] {original_line}  -> (提取的纯净ID: {share_id})")
             dead_count += 1
         else:
-            print(f"[正常] 内容有效: {original_line}")
+            print(f"[保留有效] ID: {share_id}")
             valid_records.append(original_line)
             
-        time.sleep(0.4)
+        time.sleep(0.3)
 
     # 写回原文件
     with open(FILE_PATH, "w", encoding="utf-8") as f:
@@ -139,7 +118,7 @@ def main():
 
     print("\n=== 清理完成统计 ===")
     print(f"原始总行数: {len(lines)}")
-    print(f"剔除空内容/失效数: {dead_count}")
+    print(f"剔除死链数: {dead_count}")
     print(f"跳过未校验数: {skipped_count}")
     print(f"最终保留有效数: {len(valid_records)}")
 
