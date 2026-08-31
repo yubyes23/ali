@@ -3,7 +3,6 @@ import time
 from playwright.sync_api import sync_playwright
 
 def main():
-    # 根分享链接
     root_share_url = "https://www.alipan.com/s/WqpSshkZP9g"
     target_folder_name = "电视剧实时同步更新"
     
@@ -28,65 +27,58 @@ def main():
         try:
             print("1. 正在访问根分享链接...")
             page.goto(root_share_url, timeout=60000, wait_until="domcontentloaded")
-            
-            print("等待根目录加载 (8秒)...")
             time.sleep(8)
             
-            # 2. 寻找目标文件夹并点击进入
-            print(f"正在寻找目标文件夹: '{target_folder_name}' ...")
+            print(f"2. 正在寻找目标文件夹: '{target_folder_name}' ...")
+            folder_locator = page.locator(f"text={target_folder_name}").first
+            folder_locator.wait_for(state="visible", timeout=10000)
+            folder_locator.click()
+            print("成功点击进入目标文件夹！")
             
-            # 尝试通过文本精准定位并点击
-            try:
-                # 寻找包含目标名称的元素并点击
-                folder_locator = page.locator(f"text={target_folder_name}").first
-                folder_locator.wait_for(state="visible", timeout=10000)
-                folder_locator.click()
-                print("成功点击进入目标文件夹！")
-            except Exception as click_err:
-                print(f"按文本直接点击失败，尝试遍历点击: {click_err}")
-                # 备用方案：截图并抛出异常，帮助排查
-                page.screenshot(path="click_error_snapshot.png", full_page=True)
-                raise click_err
+            # 给予充足的时间让子文件夹内部的虚拟列表渲染出来
+            print("等待子文件夹内部列表完全渲染 (8秒)...")
+            time.sleep(8)
             
-            # 等待子文件夹内部页面渲染加载
-            print("等待子文件夹内部列表加载 (6秒)...")
-            time.sleep(6)
-            
-            # 3. 在子文件夹内部开始慢速向下滚动，获取所有 300 多个子项
             all_folders = set()
-            print("开始在子文件夹内模拟容器滚动以加载全量数据...")
+            print("3. 开始在子文件夹内滚动并广谱捕获名称...")
             
-            for i in range(25): # 25轮滚动，确保能拉到底
-                print(f"正在进行第 {i+1}/25 次滚动加载...")
+            for i in range(20):
+                print(f"正在进行第 {i+1}/20 次滚动加载...")
                 
+                # 滚动容器
                 page.evaluate("""
                     () => {
-                        window.scrollBy(0, 1000);
+                        window.scrollBy(0, 800);
                         const scrollers = document.querySelectorAll('div');
                         scrollers.forEach(el => {
                             if (el.scrollHeight > el.clientHeight) {
-                                el.scrollTop += 1000;
+                                el.scrollTop += 800;
                             }
                         });
                     }
                 """)
+                time.sleep(2.5)
                 
-                time.sleep(3) # 停顿 3 秒防风控和等异步数据
-                
-                # 提取当前可见的文件名
-                elements = page.locator('.file-item-title, [class*="file-name"], [class*="ItemName"], span[title]').all()
+                # 广谱捕获：不再局限于特定 class，而是抓取子页面中所有可能代表文件/文件夹名字的标签
+                # 阿里云盘子目录通常使用 span, div 且带有文本或 title
+                elements = page.locator('span, div, a').all()
                 for el in elements:
                     try:
-                        text = el.inner_text().strip() or el.get_attribute("title")
-                        if text:
-                            clean_text = text.strip()
-                            if clean_text and len(clean_text) > 1:
-                                if not any(kw in clean_text for kw in [
-                                    "下载", "SVIP", "分享", "实时同步", "共 ", "按名称", 
-                                    "公众号", "08/", "06/", "04/", "03/", "07/", "10/", 
-                                    "2025/", "2026/", "今天", "文件夹", "大小", "修改时间"
-                                ]):
-                                    all_folders.add(clean_text)
+                        text = el.inner_text().strip()
+                        # 有时候名字藏在 title 属性里
+                        title_attr = el.get_attribute("title")
+                        
+                        candidates = [text, title_attr]
+                        for name in candidates:
+                            if name:
+                                clean_name = name.strip()
+                                # 过滤掉短字符、数字、时间、系统杂项
+                                if clean_name and len(clean_name) > 1:
+                                    if not any(kw in clean_name for kw in [
+                                        "下载", "SVIP", "分享", "实时同步", "共 ", "按名称", 
+                                        "上一页", "下一页", "确定", "取消", "属性", "重命名"
+                                    ]) and not clean_name.isdigit():
+                                        all_folders.add(clean_name)
                     except:
                         continue
                 print(f"当前已累计收集到不重复项目数: {len(all_folders)}")
