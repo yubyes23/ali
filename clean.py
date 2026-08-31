@@ -6,10 +6,12 @@ import requests
 # 配置文件路径
 FILE_PATH = "ali_shares.txt"
 
-def check_link_exist(share_id):
-    """第一轮：调用阿里云盘真实的分享校验接口"""
-    # 阿里云盘官方公开分享解析 API 地址
-    url = "https://api.alipan.com/v2/share_link/get_share_by_code"
+def check_link_content(share_id, extraction_code=""):
+    """
+    直接测试分享内容是否还在（通过获取分享文件列表接口）
+    返回: True (内容正常存在), False (内容为空、已被删空或风控失效)
+    """
+    url = "https://api.alipan.com/adrive/v3/file/list_by_share"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -17,40 +19,45 @@ def check_link_exist(share_id):
         "Referer": "https://www.alipan.com/"
     }
     
+    # 获取分享详情通常需要 share_id，部分有提取码的可能需要 extra_code
     payload = {
-        "share_code": share_id
+        "share_id": share_id,
+        "parent_file_id": "root",  # 根目录
+        "limit": 50
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        response = requests.post(url, json=payload, headers=headers, timeout=6)
+        
+        # 接口状态码非 200 视作异常或被风控
+        if response.status_code != 200:
+            print(f"    [提示] 接口返回状态码 {response.status_code}，暂且放行防止误杀")
+            return True
+            
         res_data = response.json()
         
-        # 如果返回结果中包含 code 且提示未找到，说明分享失效/被取消
+        # 检查阿里云盘明确的错误码（如分享不存在、已取消等）
         if "code" in res_data:
             code_str = str(res_data["code"])
-            if "NotFound" in code_str or "ShareLinkNotFound" in code_str or "PassCode" in code_str:
-                # 注意：如果是因为需要密码而返回特定错误码，其实链接是存在的。
-                # 但通常 get_share_by_code 只需要 share_code 即可返回基本信息。
-                pass
-            # 明确为找不到或失效
-            if code_str in ["ShareLinkNotFound", "NotFound", "ShareLinkCancelled"]:
+            if code_str in ["ShareLinkNotFound", "NotFound", "ShareLinkCancelled", "ShareLinkForbidden"]:
+                print(f"    [内容失效] 链接已被删或屏蔽: {code_str}")
                 return False
                 
-        # HTTP 状态码非 200 视作失效
-        if response.status_code != 200:
+        # 检查文件列表项
+        items = res_data.get("items", [])
+        
+        # 如果 items 为空，说明里面已经没有文件了（被清空或和谐）
+        if isinstance(items, list) and len(items) == 0:
+            print(f"    [内容为空] 分享目录内文件已被清空")
             return False
             
-        # 如果能正常拿到基本响应结构（例如包含 share_id 或 warning 等），说明链接活着
+        return True
+        
+    except requests.exceptions.RequestException as e:
+        print(f"    [网络异常] 请求出错: {e}，暂且放行")
         return True
     except Exception as e:
-        # 网络异常或解析错误时保守起见先判定为存活，避免误杀，或者根据需求返回 False
-        return True
-
-def check_link_content(share_id):
-    """第二轮：测试是否为空内容或被风控 (预留接口)"""
-    try:
-        return True
-    except Exception:
+        print(f"    [未知错误] {e}")
         return True
 
 def main():
@@ -71,11 +78,10 @@ def main():
         print(f"[-] 文件 {FILE_PATH} 读取为空，或者编码无法识别！")
         return
 
-    print(f"=== 开始处理，共读取到 {len(lines)} 行记录 ===")
+    print(f"=== 开始内容检测，共读取到 {len(lines)} 行记录 ===")
     
     valid_records = []
     dead_count = 0
-    empty_count = 0
     skipped_count = 0
 
     for line in lines:
@@ -87,6 +93,7 @@ def main():
         # 提取字段
         tokens = original_line.split()
         share_id = ""
+        pwd = ""
 
         # 匹配 0:分享ID 格式
         for token in tokens:
@@ -96,6 +103,10 @@ def main():
             elif re.match(r'^[a-zA-Z0-9]{11,14}$', token):
                 share_id = token
                 break
+
+        # 提取密码（如果有的化，通常在后面）
+        if len(tokens) >= 3:
+            pwd = tokens[2]
 
         # 兜底逻辑
         if not share_id and len(tokens) >= 2:
@@ -109,32 +120,28 @@ def main():
             skipped_count += 1
             continue
 
-        # 执行真实的 API 接口检测
-        if not check_link_exist(share_id):
-            print(f"[失效] 剔除死链: {original_line}  -> (纯净ID: {share_id})")
+        # 直接测试内容是否还在
+        is_content_valid = check_link_content(share_id, pwd)
+        
+        if not is_content_valid:
+            print(f"[剔除] 内容失效/空链: {original_line}  -> (纯净ID: {share_id})")
             dead_count += 1
-            continue
+        else:
+            print(f"[正常] 内容有效: {original_line}")
+            valid_records.append(original_line)
+            
+        time.sleep(0.4)
 
-        if not check_link_content(share_id):
-            print(f"[风控/空] 剔除空内容: {original_line}")
-            empty_count += 1
-            continue
-
-        print(f"[正常] 验证通过: {original_line}  -> (纯净ID: {share_id})")
-        valid_records.append(original_line)
-        time.sleep(0.3)  # 控制请求频率防止触发安全频控
-
-    # 写回原文件（保留原有的 0: 格式排版）
+    # 写回原文件
     with open(FILE_PATH, "w", encoding="utf-8") as f:
         for record in valid_records:
             f.write(record + "\n")
 
     print("\n=== 清理完成统计 ===")
     print(f"原始总行数: {len(lines)}")
-    print(f"剔除死链数: {dead_count}")
-    print(f"剔除风控数: {empty_count}")
-    print(f"跳过未校验: {skipped_count}")
-    print(f"剩余有效数: {len(valid_records)}")
+    print(f"剔除空内容/失效数: {dead_count}")
+    print(f"跳过未校验数: {skipped_count}")
+    print(f"最终保留有效数: {len(valid_records)}")
 
 if __name__ == "__main__":
     main()
