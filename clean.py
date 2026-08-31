@@ -101,7 +101,7 @@ for line in lines:
 
         print(f"[正常] 验证通过: {original_line}  -> (纯净ID: {share_id})")
         valid_records.append(original_line)
-        time.sleep(0.3)蔽
+        time.sleep(0.3)
 
     # 5. 将仍存活的数据写回原文件
     with open(FILE_PATH, "w", encoding="utf-8") as f:
