@@ -40,58 +40,57 @@ def main():
 
     print(f"=== 开始处理，共读取到 {len(lines)} 行记录 ===")
 
-    for line in lines:
+for line in lines:
         original_line = line.strip()
         
         # 忽略空行和注释行
         if not original_line or original_line.startswith("#"):
             continue
 
-        # 1. 解析时：剔除行首的容器分类标记 (如 "0:", "0: " 等)，避免混淆
-        clean_line = re.sub(r'^\d+:\s*', '', original_line)
-
-        # 2. 智能切分数据 (兼容逗号、竖线、空格)
-        if "," in clean_line:
-            parts = [p.strip() for p in clean_line.split(",")]
-        elif "|" in clean_line:
-            parts = [p.strip() for p in clean_line.split("|")]
-        else:
-            parts = clean_line.split()
-
-        if not parts:
-            continue
-
-        # 3. 智能提取 Share ID
+        # 核心修改：精准切分每一行
+        # 比如把 "/路径  0:5JnzcFFWa6Y  root" 按空白字符（空格/Tab）切成多个部分
+        tokens = original_line.split()
+        
         share_id = ""
-        for part in parts:
-            # 兼容带有完整 alipan.com/s/ 或 aliyundrive.com/s/ 的链接
-            if "/s/" in part:
-                share_id = part.split("/s/")[-1].split("/")[0].strip()
+        actual_index = -1
+        
+        # 遍历所有分段，寻找带有 "数字:" 开头的项，或者符合 11-14 位特征的项
+        for i, token in enumerate(tokens):
+            # 如果某一段带有形如 "0:" 或 "1:" 的前缀
+            if re.match(r'^\d+:[a-zA-Z0-9]+$', token):
+                share_id = token.split(":")[-1]  # 剥离冒号，只留后面的分享码
+                actual_index = i
                 break
-            # 匹配典型的 11-14 位纯字母数字分享码
-            elif re.match(r'^[a-zA-Z0-9]{11,14}$', part):
-                share_id = part
-                # 尽量采用后面的字符串作为ID（防止刚好前面的路径全英文）
-                if len(parts) > 1 and parts.index(part) > 0:
+            # 兼容万一没有带 0: 的纯分享码
+            elif re.match(r'^[a-zA-Z0-9]{11,14}$', token):
+                share_id = token
+                actual_index = i
+                break
+
+        # 如果还没找到，尝试从带 /s/ 的链接中提取
+        if not share_id:
+            for i, token in enumerate(tokens):
+                if "/s/" in token:
+                    share_id = token.split("/s/")[-1].split("/")[0].strip()
+                    actual_index = i
                     break
 
-        # 如果正则没抓到，强制取列表的第 2 个或第 1 个元素兜底
-        if not share_id:
-            if len(parts) >= 2:
-                share_id = parts[1]
-            else:
-                share_id = parts[0]
+        # 兜底保险
+        if not share_id and len(tokens) >= 2:
+            # 默认取倒数第二个或第二个作为分享码
+            candidate = tokens[1].replace("0:", "").replace("1:", "")
+            if len(candidate) >= 6:
+                share_id = candidate
 
-        # 如果兜底后 ID 仍然为空或含有明显非 ID 字符，跳过
         if not share_id or len(share_id) < 6:
             print(f"[跳过] 无法提取有效分享码: {original_line}")
             valid_records.append(original_line)
             skipped_count += 1
             continue
 
-        # 4. 执行存活校验
+        # 4. 执行存活校验（此时的 share_id 已经是纯净的 5JnzcFFWa6Y，不带 0: 了）
         if not check_link_exist(share_id):
-            print(f"[失效] 剔除死链: {original_line}  -> (提取的ID: {share_id})")
+            print(f"[失效] 剔除死链: {original_line}  -> (纯净ID: {share_id})")
             dead_count += 1
             continue
 
@@ -100,10 +99,9 @@ def main():
             empty_count += 1
             continue
 
-        # 校验通过，完整保留原始行（带有 0: 标记）
-        print(f"[正常] 验证通过: {original_line}  -> (提取的ID: {share_id})")
+        print(f"[正常] 验证通过: {original_line}  -> (纯净ID: {share_id})")
         valid_records.append(original_line)
-        time.sleep(0.3)  # 控制并发防屏蔽
+        time.sleep(0.3)蔽
 
     # 5. 将仍存活的数据写回原文件
     with open(FILE_PATH, "w", encoding="utf-8") as f:
