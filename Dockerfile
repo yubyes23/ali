@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # 安装 Python 依赖
-RUN pip install --no-cache-dir playwright fastapi uvicorn
+RUN pip install --no-cache-dir playwright fastapi uvicorn requests
 RUN playwright install chromium
 
 # 复制你的服务代码
